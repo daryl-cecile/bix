@@ -10,7 +10,10 @@ import {
 	toMakeETagFunction,
 	isAbsolute,
 	normalizeTypes,
-	normalizeType, setCharset, EmptyFunctionWithParam, EmptyFunction
+	normalizeType,
+	setCharset,
+	EmptyFunctionWithParam,
+	EmptyFunction
 } from "./Bix.Utils";
 import {isIP, Socket} from "net";
 import * as fresh from "fresh";
@@ -24,6 +27,7 @@ import * as cookie from "cookie";
 import * as encodeUrl from "encodeurl";
 import * as escapeHtml from "escape-html";
 import * as vary from "vary";
+import * as path from "path";
 
 const charsetRegExp = /;\s*charset\s*=/;
 
@@ -34,16 +38,25 @@ class ParsedURL{
 		this.query = ParsedURL.parseQuery(url);
 	}
 
-	private static parseQuery(queryString:string){
-		let firstIndex = queryString.indexOf("?");
-		if (firstIndex > -1) queryString = queryString.substr(firstIndex + 1);
-		let parts = queryString.split("&");
+	private static parseQuery(url:string){
+		let firstIndex = url.indexOf("?");
+		if (firstIndex === -1) return {};
+		url = url.substr(firstIndex + 1);
+		if (url.length === 0) return {};
+		let parts = url.split("&");
 		let obj = {};
 		parts.forEach(part => {
 			let [key,value] = part.split("=");
-			obj[decodeURIComponent(key)] = decodeURIComponent(value);
+			let val = decodeURIComponent(value);
+			obj[decodeURIComponent(key)] = ParsedURL.normalizeValue(val);
 		});
 		return obj;
+	}
+
+	private static normalizeValue(value:string){
+		if ( !isNaN(+value) ) return Number(value);
+		if ( value === "true" || value === "false" ) return value === "true";
+		return value;
 	}
 }
 
@@ -244,15 +257,15 @@ class Request{
 
 class Response{
 
-	private readonly app:App;
 	private readonly context:Context;
 	private readonly internalRes:http.ServerResponse;
+
+	public viewFolderName:string = null;
 
 	public locals: {[name:string]:any} = {};
 
 	constructor(res:http.ServerResponse, context:Context) {
 		this.internalRes = res;
-		this.app = context.app;
 		this.context = context;
 	}
 
@@ -318,7 +331,7 @@ class Response{
 	}
 
 	json(content) {
-		let {escape, replacer, spaces} = this.app.appConstants.jsonOptions;
+		let {escape, replacer, spaces} = this.context.app.appConstants.jsonOptions;
 
 		replacer = replacer ?? (() => {
 			const seen = new WeakSet();
@@ -344,7 +357,7 @@ class Response{
 	}
 
 	jsonp(content) {
-		let {escape, replacer, spaces, callbackName} = this.app.appConstants.jsonOptions;
+		let {escape, replacer, spaces, callbackName} = this.context.app.appConstants.jsonOptions;
 		let body = Response.stringify(content, replacer, spaces, escape)
 		let callback = this.context.request.query[callbackName];
 
@@ -416,7 +429,7 @@ class Response{
 		}
 
 		// determine if ETag should be generated
-		let etagFn = toMakeETagFunction(this.app.options.etag);
+		let etagFn = toMakeETagFunction(this.context.app.options.etag);
 		let generateETag = !this.get('ETag') && typeof etagFn === 'function'
 
 		// populate Content-Length
@@ -424,7 +437,7 @@ class Response{
 		if (chunk !== undefined) {
 			if (Buffer.isBuffer(chunk)) {
 				len = chunk.length
-			} else if (!generateETag && chunk.length < this.app.appConstants.maxChunkSizeForETag) {
+			} else if (!generateETag && chunk.length < this.context.app.appConstants.maxChunkSizeForETag) {
 				len = Buffer.byteLength(chunk, encoding)
 			} else {
 				// convert chunk to Buffer and calculate
@@ -728,30 +741,28 @@ class Response{
 		return this;
 	}
 
-	render(view, options, callback) {
-		let app = this.app;
+	render(view, options, callback:(err:Error, value:string)=>void) {
+		let app = this.context.app;
 		let done = callback;
-		let opts = options || {};
 		let req = this.context.request;
 		let self = this;
 
-		// support callback function as second arg
-		if (typeof options === 'function') {
-			done = options;
-			opts = {};
-		}
+		let viewFolder = path.join(app.options.view.viewFolderPath, this.viewFolderName ?? app.options.view.viewFolderName);
+		let fullViewPath = path.join(viewFolder, view);
 
-		// merge res.locals
-		opts._locals = self.locals;
+		console.log({fullViewPath});
 
 		// default callback to respond
-		done = done || function (err, str) {
+		done = done || ((err, str) => {
 			if (err) return req.next(err);
 			self.send(str);
-		};
+		});
 
 		// render
-		app.render(view, opts, done);
+		app.render(fullViewPath, {
+			...this.locals,
+			...options
+		}, done);
 	}
 
 	private static stringify (value: any, replacer, spaces:string, escape:boolean) {
@@ -876,6 +887,7 @@ export class Context implements IDisposable{
 	public request: Request;
 	public response: Response;
 	public next:Function = ()=>{};
+	public lastError: Error = null;
 
 	constructor(public app:App, req:http.IncomingMessage, res:http.ServerResponse, next){
 		this.request = new Request(req, this, next);

@@ -7,16 +7,15 @@
 		"preserveConstEnums": true,
 		"emitDecoratorMetadata": true,
 		"experimentalDecorators": true,
+		"declaration": true,
 		"outDir": "dist",
-		"rootDir": "src",
 		"lib": [
 			"esnext"
 		],
 		"inlineSourceMap": true
 	},
-	"exclude": [
-		"node_modules",
-		"dist",
-		"test"
+	"include": [
+		"./src/*.ts",
+		"./example/*.ts"
 	]
 }

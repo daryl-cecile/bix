@@ -5,6 +5,7 @@ import * as contentType from "content-type";
 
 export type EmptyFunction = ()=>void;
 export type EmptyFunctionWithParam<T> = (...args:T[])=>void;
+export type EmptyFunctionWithSingleParam<T> = (arg:T)=>void;
 export type FunctionWithParam<T,O> = (...args:T[])=>O;
 
 export function createETagGenerator (options) {

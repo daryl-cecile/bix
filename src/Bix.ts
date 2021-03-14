@@ -2,6 +2,9 @@ import {v4 as uuid} from 'uuid';
 import * as http from "http";
 import {Controller, Route, Router} from "./Bix.Router";
 import {Context} from "./Bix.Context";
+import {EmptyFunction, EmptyFunctionWithParam, EmptyFunctionWithSingleParam} from "./Bix.Utils";
+import * as ejs from "ejs";
+import * as path from "path";
 
 export interface IDisposable{
 	dispose():void;
@@ -16,8 +19,9 @@ export type AppOptions = {
 	trustProxy?:boolean|number|Function,
 	etag?:boolean|string|Function,
 	view?:{
-		engine:string,
-		defaultPath:string
+		engine?:string,
+		viewFolderPath?:string,
+		viewFolderName?:string
 	},
 	subdomainOffset?:number,
 	ignoreRouteCase?:boolean,
@@ -45,8 +49,15 @@ export type AppLevelEvents = {
 	"ROUTES:BEFORE_REFRESH" ?: Array<AppEventHandler>
 	"ROUTES:AFTER_REFRESH" ?: Array<AppEventHandler>
 	"REQUEST:INCOMING" ?: Array<AppEventHandler>
+	"REQUEST:NOT_FOUND" ?: Array<AppEventHandler>
+	"REQUEST:ERRORED" ?: Array<AppEventHandler>
 	"CONTROLLER:REGISTERED" ?: Array<AppEventHandler>
 	[customEventName:string] : Array<AppEventHandler>
+};
+
+export type AppLevelErrorHandlers = {
+	"NOT_FOUND"?: EmptyFunctionWithSingleParam<Context>
+	"INTERNAL"?: EmptyFunctionWithSingleParam<Context>
 };
 
 export type AppLevelEventNames = Exclude<keyof AppLevelEvents, number>;
@@ -242,12 +253,14 @@ class AppEventEmitter{
 
 abstract class Application extends AppEventEmitter implements IDisposable{
 	public readonly guid = uuid();
-	private appOptions:AppOptions = {};
-	private baseRouter:Router;
 	public appConstants:AppConstants;
 
 	public stack:Array<Controller> = [];
 	public routeStack:Array<Route> = [];
+
+	private appOptions:AppOptions = {};
+	private baseRouter:Router;
+	private appErrorHandlers:AppLevelErrorHandlers = {};
 
 	get options():AppOptions{
 		return {...this.appOptions};
@@ -263,6 +276,11 @@ abstract class Application extends AppEventEmitter implements IDisposable{
 			etag:true,
 			ignoreRouteCase: true,
 			disableEvents: false,
+			view:{
+				engine: "ejs",
+				viewFolderPath: path.resolve("./"),
+				viewFolderName: "views"
+			},
 			...appOptions,
 		};
 		this.appConstants = {
@@ -275,6 +293,18 @@ abstract class Application extends AppEventEmitter implements IDisposable{
 			},
 			...constantOverrides
 		};
+		this.onError("NOT_FOUND", context => {
+			if (!context.lastError) return;
+			context.response
+				.status(404)
+				.send("Not Found: " + context.request.url);
+		});
+		this.onError("INTERNAL", context => {
+			if (!context.lastError) return;
+			context.response
+				.status(500)
+				.send("Internal Server Error: " + context.request.url);
+		});
 	}
 
 	listen(port:number, handler?:Function){
@@ -284,22 +314,40 @@ abstract class Application extends AppEventEmitter implements IDisposable{
 			let context = new Context(this, req, res, (err?:Error)=>{
 
 				let i = 0;
-				let nextFn = ()=>{
+				let nextFn = (err?:Error)=>{
+					if (err){
+						context.lastError = err;
+						this.trigger("REQUEST:ERRORED", context);
+						this.appErrorHandlers.INTERNAL?.(context);
+						context.response.end();
+						return;
+					}
 					let route = this.routeStack[i];
 					i++;
 					if (!route) return;
 					if (!route.isMatch(context)) return nextFn();
 					context.next = nextFn;
-					context.request.params = route.params;
-					route.handler(context);
+					context.request.params = Object.fromEntries(Object.entries(route.params).map(([k,v])=>{
+						return [decodeURIComponent(k), decodeURIComponent(v)];
+					}));
+					context.response.viewFolderName = route.viewFolderName;
+					try{
+						route.handler(context);
+					}
+					catch(ex){
+						context.lastError = ex;
+						this.trigger("REQUEST:ERRORED", context);
+						this.appErrorHandlers.INTERNAL?.(context);
+						context.response.end();
+					}
 				}
 
 				nextFn(); //start stack walk
 
 				if (i - 1 >= this.routeStack.length){
-					context.response
-						.status(404)
-						.send("Not Found: " + context.request.url);
+					context.lastError = new Error("Resource Not Found");
+					this.trigger("REQUEST:NOT_FOUND", context);
+					this.appErrorHandlers.NOT_FOUND?.(context);
 				}
 
 			});
@@ -324,36 +372,77 @@ abstract class Application extends AppEventEmitter implements IDisposable{
 		return this;
 	}
 
-	refreshRouteStack(existingRouter:Router=this.baseRouter){
+	refreshRouteStack(){
 		this.trigger("ROUTES:BEFORE_REFRESH");
-		this.baseRouter = existingRouter ?? new Router();
+		this.routeStack = [];
 		this.stack.forEach(controller => {
-			controller.init(this.baseRouter);
+			let baseRouter = new Router(controller.viewFolder);
+			controller.init(baseRouter);
+			this.routeStack.push(...baseRouter.routeStack);
 		});
-		this.routeStack = this.baseRouter.routeStack;
 		this.trigger("ROUTES:AFTER_REFRESH");
 		return this;
 	}
 
-	registerController(controller:Controller){
+	registerController(controller:Controller);
+	registerController(controller:Controller, viewFolder?:string);
+	registerController(viewFolder:string, controller:Controller);
+	registerController(a:any, b?:any){
+		let viewFolder:string;
+		let controller:Controller;
+		if (typeof a === "string" || a instanceof String){
+			viewFolder = <string>a;
+			controller = b;
+		}
+		else{
+			controller = a;
+			viewFolder = b;
+		}
+		controller.viewFolder = viewFolder;
+
 		this.stack.push(controller);
 		this.trigger("CONTROLLER:REGISTERED", controller);
 		return this;
 	}
 
-	registerControllers(...controllers:Array<Controller|Controller[]>){
-		controllers.forEach(c => {
-			if (Array.isArray(c)){
-				this.registerControllers(...c);
-			}
-			else{
-				this.registerController(c);
-			}
-		});
+	registerControllers(viewFolder:string, ...controllers:Array<Controller|Controller[]>)
+	registerControllers(...controllers:Array<Controller|Controller[]>)
+	registerControllers(...args:any[]){
+		if (args.length === 0) return this;
+		let first = args.shift();
+		if (typeof first === "string" || first instanceof String){
+			args.forEach((c:Controller) => {
+				if (Array.isArray(c)){
+					this.registerControllers(first, ...c);
+				}
+				else{
+					this.registerController(first, c);
+				}
+			});
+		}
+		else{
+			args.forEach((c:Controller) => {
+				if (Array.isArray(c)){
+					this.registerControllers(...c);
+				}
+				else{
+					this.registerController(c);
+				}
+			});
+		}
 	}
 
-	render(view:any, opts:any, callback:Function){
-		throw new Error("Not Implemented");
+	onError(errorName:keyof AppLevelErrorHandlers, handler:EmptyFunctionWithSingleParam<Context>){
+		this.appErrorHandlers[errorName] = handler;
+		return;
+	}
+
+	render(viewPath:any, model:any, callback:(err: Error | null, str: string)=>void){
+		ejs.renderFile(viewPath, model, {
+			async: true,
+			beautify: false,
+			compileDebug: this.appOptions.env === "development"
+		}, callback);
 	}
 
 	updateOptions(optionPartial:Partial<AppOptions>){
@@ -375,7 +464,7 @@ abstract class Application extends AppEventEmitter implements IDisposable{
 		let a = new App(this.appOptions, this.appConstants);
 		a.stack = [...this.stack];
 		a.routeStack = [...this.routeStack];
-		a.baseRouter = new Router();
+		a.baseRouter = new Router(a.baseRouter);
 		a.baseRouter.routeStack = [...this.baseRouter.routeStack];
 		return a;
 	}

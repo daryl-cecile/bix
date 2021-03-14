@@ -3,18 +3,19 @@ import {ApplicationError} from "./Bix";
 import {EmptyFunction, parseUrlPattern} from "./Bix.Utils";
 
 
-export type AsyncControllerHandler = (router:Router) => void;
+export type ControllerHandler = (router:Router) => void;
 
 export type AsyncRequestHandler = (context:Context, next?:Function) => Promise<void>|void;
 
 export class Controller {
 
-	public readonly init:AsyncControllerHandler;
+	public readonly init:ControllerHandler;
 	public readonly rootPath:string = "/";
+	public viewFolder:string = "";
 
-	constructor(handler: AsyncControllerHandler);
-	constructor(routePath:string, handler: AsyncControllerHandler);
-	constructor(routePathOrHandler:string|AsyncControllerHandler, handler?:AsyncControllerHandler) {
+	constructor(handler: ControllerHandler);
+	constructor(routePath:string, handler: ControllerHandler);
+	constructor(routePathOrHandler:string|ControllerHandler, handler?:ControllerHandler) {
 		if (typeof routePathOrHandler === "string" && !handler){
 			throw new ApplicationError.AppCycleError("Unable to create a controller without handler");
 		}
@@ -26,9 +27,9 @@ export class Controller {
 		}
 	}
 
-	public static Instance(handler:AsyncControllerHandler);
-	public static Instance(routePath:string, handler:AsyncControllerHandler);
-	public static Instance(routeOrPath:any, handler?:AsyncControllerHandler){
+	public static Instance(handler:ControllerHandler);
+	public static Instance(routePath:string, handler:ControllerHandler);
+	public static Instance(routeOrPath:any, handler?:ControllerHandler){
 		return new Controller(routeOrPath, handler);
 	}
 
@@ -37,9 +38,26 @@ export class Controller {
 export class Router{
 
 	public routeStack:Array<Route> = [];
+	protected viewFolderPath:string = "";
+
+	constructor(oldRouter:Router)
+	constructor(viewFolderPath:string)
+	constructor(viewFolderPathOrRouter:any) {
+		if (viewFolderPathOrRouter === void 0 || viewFolderPathOrRouter === null){
+			this.viewFolderPath = null;
+		}
+		else if (typeof viewFolderPathOrRouter === "string" || viewFolderPathOrRouter instanceof String){
+			this.viewFolderPath = <string>viewFolderPathOrRouter;
+		}
+		else{
+			this.viewFolderPath = viewFolderPathOrRouter.viewFolderPath;
+		}
+	}
 
 	onGET(path:string, handler:AsyncRequestHandler){
-		this.routeStack.push(new Route(path, "GET", handler));
+		let r = new Route(path, "GET", handler);
+		r.viewFolderName = this.viewFolderPath;
+		this.routeStack.push(r);
 	}
 
 }
@@ -47,6 +65,7 @@ export class Router{
 export class Route {
 	public pathPattern:string = "";
 	public method:string = "GET";
+	public viewFolderName:string = "";
 	public handler:AsyncRequestHandler = ()=>{};
 
 	constructor(pathPattern:string, method:string, handler:AsyncRequestHandler) {
@@ -66,7 +85,7 @@ export class Route {
 	}
 
 	isPathMatch(context:Context){
-		let o = parseUrlPattern(this.pathPattern, context.request.url, context.app.options.ignoreRouteCase);
+		let o = parseUrlPattern(this.pathPattern, context.request.url.split("?")[0], context.app.options.ignoreRouteCase);
 		this.params = o.matches;
 		return o.isMatch;
 	}

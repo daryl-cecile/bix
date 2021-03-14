@@ -1,4 +1,4 @@
-import {Controller} from "./Bix.Router";
+import {Controller} from "../src/Bix.Router";
 
 export default Controller.Instance(router => {
 
