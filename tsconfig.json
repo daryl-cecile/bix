@@ -1,0 +1,22 @@
+{
+	"compileOnSave": true,
+	"compilerOptions": {
+		"module": "CommonJS",
+		"target": "ES2019",
+		"removeComments": true,
+		"preserveConstEnums": true,
+		"emitDecoratorMetadata": true,
+		"experimentalDecorators": true,
+		"outDir": "dist",
+		"rootDir": "src",
+		"lib": [
+			"esnext"
+		],
+		"inlineSourceMap": true
+	},
+	"exclude": [
+		"node_modules",
+		"dist",
+		"test"
+	]
+}
