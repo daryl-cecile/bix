@@ -2,7 +2,7 @@ import * as http from "http";
 import * as accepts from "accepts";
 import * as parseRange from "range-parser";
 import * as typeis from "type-is";
-import {App, ApplicationError, IDisposable} from "./Bix";
+import {App, AppEnvironments, ApplicationError} from "./Bix.Application";
 import {
 	getIP,
 	getAllIPs,
@@ -13,21 +13,21 @@ import {
 	normalizeType,
 	setCharset,
 	EmptyFunctionWithParam,
-	EmptyFunction
+	EmptyFunction,
+	IDisposable
 } from "./Bix.Utils";
-import {isIP, Socket} from "net";
+import {isIP} from "net";
 import * as fresh from "fresh";
 import * as send from "send";
 import * as statuses from "statuses";
 import * as onFinished from "on-finished";
 import * as contentDisposition from "content-disposition";
-import {resolve, extname} from "path";
+import {resolve, extname, join} from "path";
 import {sign} from "cookie-signature";
 import * as cookie from "cookie";
 import * as encodeUrl from "encodeurl";
 import * as escapeHtml from "escape-html";
 import * as vary from "vary";
-import * as path from "path";
 
 const charsetRegExp = /;\s*charset\s*=/;
 
@@ -747,8 +747,8 @@ class Response{
 		let req = this.context.request;
 		let self = this;
 
-		let viewFolder = path.join(app.options.view.viewFolderPath, this.viewFolderName ?? app.options.view.viewFolderName);
-		let fullViewPath = path.join(viewFolder, view);
+		let viewFolder = join(app.options.view.viewFolderPath, this.viewFolderName ?? app.options.view.viewFolderName);
+		let fullViewPath = join(viewFolder, view);
 
 		console.log({fullViewPath});
 
@@ -884,21 +884,28 @@ class Response{
 
 export class Context implements IDisposable{
 
-	public request: Request;
-	public response: Response;
+	public readonly environment: AppEnvironments = "development";
+
 	public next:Function = ()=>{};
 	public lastError: Error = null;
 
+	private __request: Request;
+	private __response: Response;
+
+	public get request(){ return this.__request }
+	public get response(){ return this.__response }
+
 	constructor(public app:App, req:http.IncomingMessage, res:http.ServerResponse, next){
-		this.request = new Request(req, this, next);
-		this.response = new Response(res, this);
+		this.__request = new Request(req, this, next);
+		this.__response = new Response(res, this);
+		this.environment = app.options.env;
 		this.next = next;
 		return this;
 	}
 
 	dispose() {
-		this.response = null;
-		this.request = null;
+		this.__response = null;
+		this.__request = null;
 	}
 
 }

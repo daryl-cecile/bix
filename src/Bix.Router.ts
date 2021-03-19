@@ -1,6 +1,7 @@
 import {Context} from "./Bix.Context";
-import {ApplicationError} from "./Bix";
+import {ApplicationError} from "./Bix.Application";
 import {EmptyFunction, parseUrlPattern} from "./Bix.Utils";
+import {v4 as uuid} from 'uuid';
 
 
 export type ControllerHandler = (router:Router) => void;
@@ -38,6 +39,7 @@ export class Controller {
 export class Router{
 
 	public routeStack:Array<Route> = [];
+	public rootPath:string = "/";
 	protected viewFolderPath:string = "";
 
 	constructor(oldRouter:Router)
@@ -54,8 +56,12 @@ export class Router{
 		}
 	}
 
+	private static joinPath(...parts:Array<string>){
+		return parts.join("/").replace(/\/{2,}/gm, "/");
+	}
+
 	onGET(path:string, handler:AsyncRequestHandler){
-		let r = new Route(path, "GET", handler);
+		let r = new Route(Router.joinPath(this.rootPath,path), "GET", handler);
 		r.viewFolderName = this.viewFolderPath;
 		this.routeStack.push(r);
 	}
@@ -92,5 +98,100 @@ export class Route {
 
 	isMatch(context:Context){
 		return this.isMethodMatch(context) && this.isPathMatch(context);
+	}
+}
+
+export type ControllerKitController = {
+	bix:{
+		prePath:string,
+		properties: Array<{
+			method: string,
+			pattern: string,
+			handler: Function
+		}>
+	}
+	[property:string]: any
+}
+
+export namespace ControllerKit{
+	let definitions = {};
+
+	function registerMethod<T>(method:string, target:T, pattern, descriptor, key:keyof T, overrideName:boolean=false){
+		if (!target.constructor.hasOwnProperty("__bix")) {
+			let id = uuid();
+			target.constructor['__bix'] = id;
+			definitions[id] = {
+				prePath: null,
+				properties: []
+			};
+		}
+		definitions[ target.constructor['__bix'] ].properties.push({
+			method: method,
+			pattern: pattern ? (overrideName ? pattern : [key, pattern].join("/")) : key,
+			handler: descriptor.value
+		});
+	}
+
+	export function Controller(pathOverride?:string):any{
+		return function<T>(target:T, key:keyof T, descriptor?): any {
+			let identifier = target['__bix'];
+			definitions[ identifier ].prePath = "/" + (pathOverride ?? target['name'] ?? "");
+			target['bix'] = definitions[ identifier ];
+			definitions[ identifier ] = undefined;
+		}
+	}
+
+	export function GET(pattern?:string, overrideName:boolean=false): any {
+		return function<T>(target: T, key: keyof T, descriptor?): any {
+			registerMethod("GET", target, pattern, descriptor, key, overrideName);
+		}
+	}
+
+	export function POST(pattern?:string, overrideName:boolean=false): any {
+		return function<T>(target: T, key: keyof T, descriptor?): any {
+			registerMethod("POST", target, pattern, descriptor, key, overrideName);
+		}
+	}
+
+	export function PUT(pattern?:string, overrideName:boolean=false): any {
+		return function<T>(target: T, key: keyof T, descriptor?): any {
+			registerMethod("PUT", target, pattern, descriptor, key, overrideName);
+		}
+	}
+
+	export function DELETE(pattern?:string, overrideName:boolean=false): any {
+		return function<T>(target: T, key: keyof T, descriptor?): any {
+			registerMethod("DELETE", target, pattern, descriptor, key, overrideName);
+		}
+	}
+
+	export function OPTIONS(pattern?:string, overrideName:boolean=false): any {
+		return function<T>(target: T, key: keyof T, descriptor?): any {
+			registerMethod("OPTIONS", target, pattern, descriptor, key, overrideName);
+		}
+	}
+
+	export function HEAD(pattern?:string, overrideName:boolean=false): any {
+		return function<T>(target: T, key: keyof T, descriptor?): any {
+			registerMethod("HEAD", target, pattern, descriptor, key, overrideName);
+		}
+	}
+
+	export function CONNECT(pattern?:string, overrideName:boolean=false): any {
+		return function<T>(target: T, key: keyof T, descriptor?): any {
+			registerMethod("CONNECT", target, pattern, descriptor, key, overrideName);
+		}
+	}
+
+	export function TRACE(pattern?:string, overrideName:boolean=false): any {
+		return function<T>(target: T, key: keyof T, descriptor?): any {
+			registerMethod("TRACE", target, pattern, descriptor, key, overrideName);
+		}
+	}
+
+	export function PATCH(pattern?:string, overrideName:boolean=false): any {
+		return function<T>(target: T, key: keyof T, descriptor?): any {
+			registerMethod("PATCH", target, pattern, descriptor, key, overrideName);
+		}
 	}
 }

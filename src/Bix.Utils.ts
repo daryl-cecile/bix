@@ -2,6 +2,11 @@ import * as proxyaddr from "proxy-addr";
 import * as etag from "etag";
 import * as send from "send";
 import * as contentType from "content-type";
+import {Context} from "./Bix.Context";
+
+export interface IDisposable{
+	dispose():void;
+}
 
 export type EmptyFunction = ()=>void;
 export type EmptyFunctionWithParam<T> = (...args:T[])=>void;
@@ -137,7 +142,7 @@ export function parseUrlPattern(pattern:string, url:string, ignoreCase:boolean=f
 		}
 	});
 
-	let r = new RegExp(w, "g" + (ignoreCase ? "i" : ""));
+	let r = new RegExp("^" + w, "gm" + (ignoreCase ? "i" : ""));
 
 	let v = r.exec(url);
 
@@ -150,6 +155,95 @@ export function parseUrlPattern(pattern:string, url:string, ignoreCase:boolean=f
 	return {
 		isMatch: Object.keys(m).length > 0,
 		matches: m
+	}
+
+}
+
+export namespace Performance{
+
+	export function LogPerformance(context:Context, whenExceedsTimeInMs: number = 5, whenExceedsCalls: number = 30): any {
+		return function<T>(target: T, key: keyof T, descriptor?): any {
+			descriptor =
+				descriptor || Object.getOwnPropertyDescriptor(target, key) || Object.getOwnPropertyDescriptor(Object.getPrototypeOf(target), key);
+			const originalMethod = descriptor.value;
+
+			if (!(process.env.IS_PROD != "true" && context.environment === "development")) {
+				return originalMethod;
+			}
+
+			const log = (message: string) => {
+				console.log(message, 'color: red;');
+			};
+
+			const debouncedLog = LogUtilities.debounce(log, 1000);
+			const parentName = ((target || {}).constructor || <any>{}).name || 'UNKNOWN';
+			const caller = `${parentName}:${key}`;
+			let calls = 0;
+			let totalElapsed = 0;
+
+			descriptor.value = function() {
+				calls++;
+				const p = require('perf_hooks');
+				const t0 = p.performance.now();
+				const result = originalMethod.apply(this, arguments);
+				const t1 = p.performance.now();
+				const elapsed = Math.round((t1 - t0) * 10) / 10;
+
+				totalElapsed += elapsed;
+
+				if (elapsed > whenExceedsTimeInMs || totalElapsed > whenExceedsTimeInMs || calls > whenExceedsCalls) {
+					const elapsedStr = LogUtilities.padStart(Math.round(elapsed).toLocaleString(), ' ', 10);
+					const totalStr = LogUtilities.padEnd(Math.round(totalElapsed).toLocaleString() + 'ms', ' ', 10);
+					const callsStr = LogUtilities.padEnd(calls.toLocaleString(), ' ', 10);
+					const message = `%c ${elapsedStr}ms | total: ${totalStr} | calls: ${callsStr} | ${caller}`;
+					debouncedLog(message);
+				}
+
+				return result;
+			};
+
+			return descriptor;
+		};
+	}
+
+	namespace LogUtilities{
+		export function padStart(val: string, padStr: string, len: number): string {
+			return pad(val, padStr, len, false);
+		}
+
+		export function padEnd(val: string, padStr: string, len: number): string {
+			return pad(val, padStr, len, true);
+		}
+
+		export function pad(val: string, padStr: string, len: number, toEnd: boolean): string {
+			if (val.length > len) {
+				return val;
+			} else {
+				len -= val.length;
+
+				while (len > padStr.length) {
+					padStr += padStr;
+				}
+
+				return toEnd ? val + padStr.slice(0, len) : padStr.slice(0, len) + val;
+			}
+		}
+
+		export function debounce(func: (...args: any[]) => void, wait: number): (...args: any[]) => void {
+			let timeout: any;
+
+			return function() {
+				const context = this;
+				const args = arguments;
+				const later = function() {
+					timeout = null;
+					func.apply(context, args);
+				};
+
+				clearTimeout(timeout);
+				timeout = setTimeout(later, wait);
+			};
+		}
 	}
 
 }
